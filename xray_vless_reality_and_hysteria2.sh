@@ -19,6 +19,14 @@ warn() { echo -e "${YELLOW}[!]${NC} $1"; }
 err() { echo -e "${RED}[✗]${NC} $1"; exit 1; }
 info() { echo -e "${CYAN}[i]${NC} $1"; }
 
+# 检测是否需要 sudo 运行 docker
+DOCKER="docker"
+if ! docker info &>/dev/null; then
+    if sudo docker info &>/dev/null; then
+        DOCKER="sudo docker"
+    fi
+fi
+
 # 获取公网 IP
 get_ip() {
     curl -s4 ip.sb || curl -s4 ifconfig.me || curl -s4 icanhazip.com
@@ -69,7 +77,7 @@ install_qrencode() {
 
 # ==================== 安装 VLESS Reality ====================
 install_vless() {
-    if docker ps -a --format '{{.Names}}' | grep -q '^xray_reality$'; then
+    if $DOCKER ps -a --format '{{.Names}}' | grep -q '^xray_reality$'; then
         warn "VLESS Reality 容器已存在，跳过"
         return
     fi
@@ -77,7 +85,7 @@ install_vless() {
     log "安装 VLESS Reality (端口: ${VLESS_PORT})..."
     mkdir -p ~/xray_config
     
-    docker run -d \
+    $DOCKER run -d \
         --name xray_reality \
         --restart=always \
         --log-opt max-size=50m \
@@ -92,7 +100,7 @@ install_vless() {
 
 # ==================== 安装 Hysteria2 ====================
 install_hysteria() {
-    if docker ps -a --format '{{.Names}}' | grep -q '^hysteria2$'; then
+    if $DOCKER ps -a --format '{{.Names}}' | grep -q '^hysteria2$'; then
         warn "Hysteria2 容器已存在，跳过"
         return
     fi
@@ -129,7 +137,7 @@ masquerade:
     rewriteHost: true
 EOF
 
-    docker run -d \
+    $DOCKER run -d \
         --name hysteria2 \
         --restart=always \
         --log-opt max-size=50m \
@@ -149,12 +157,12 @@ save_vless_info() {
     local waited=0
     
     while [ $waited -lt $max_wait ]; do
-        if docker exec xray_reality cat /config_info.txt &>/dev/null; then
+        if $DOCKER exec xray_reality cat /config_info.txt &>/dev/null; then
             # 保存完整配置信息
-            docker exec xray_reality cat /config_info.txt > ~/proxy_info/vless_info.txt
+            $DOCKER exec xray_reality cat /config_info.txt > ~/proxy_info/vless_info.txt
             
             # 提取分享链接
-            docker exec xray_reality cat /config_info.txt | grep -E "^vless://" > ~/proxy_info/vless_uri.txt 2>/dev/null || true
+            $DOCKER exec xray_reality cat /config_info.txt | grep -E "^vless://" > ~/proxy_info/vless_uri.txt 2>/dev/null || true
             
             # 生成二维码
             local vless_uri=$(cat ~/proxy_info/vless_uri.txt 2>/dev/null)
@@ -226,7 +234,7 @@ print_info() {
         elif [ -f ~/xray_config/config_info.txt ]; then
             cat ~/xray_config/config_info.txt
         else
-            docker exec xray_reality cat /config_info.txt 2>/dev/null || warn "VLESS 配置信息暂未生成"
+            $DOCKER exec xray_reality cat /config_info.txt 2>/dev/null || warn "VLESS 配置信息暂未生成"
         fi
         echo ""
     fi
@@ -263,23 +271,23 @@ show_status() {
     echo ""
     
     echo -e "${YELLOW}【Docker 容器状态】${NC}"
-    docker ps -a --filter "name=xray_reality" --filter "name=hysteria2" \
+    $DOCKER ps -a --filter "name=xray_reality" --filter "name=hysteria2" \
         --format "table {{.Names}}\t{{.Status}}\t{{.Ports}}" 2>/dev/null || warn "无法获取容器状态"
     echo ""
     
     echo -e "${YELLOW}【VLESS Reality】${NC}"
-    if docker ps --format '{{.Names}}' | grep -q '^xray_reality$'; then
+    if $DOCKER ps --format '{{.Names}}' | grep -q '^xray_reality$'; then
         echo -e "状态: ${GREEN}运行中${NC}"
-        docker logs --tail 5 xray_reality 2>&1 | head -5
+        $DOCKER logs --tail 5 xray_reality 2>&1 | head -5
     else
         echo -e "状态: ${RED}未运行${NC}"
     fi
     echo ""
     
     echo -e "${YELLOW}【Hysteria2】${NC}"
-    if docker ps --format '{{.Names}}' | grep -q '^hysteria2$'; then
+    if $DOCKER ps --format '{{.Names}}' | grep -q '^hysteria2$'; then
         echo -e "状态: ${GREEN}运行中${NC}"
-        docker logs --tail 5 hysteria2 2>&1 | head -5
+        $DOCKER logs --tail 5 hysteria2 2>&1 | head -5
     else
         echo -e "状态: ${RED}未运行${NC}"
     fi
@@ -300,8 +308,8 @@ show_info() {
     echo -e "${YELLOW}【VLESS Reality】${NC}"
     if [ -f ~/proxy_info/vless_info.txt ]; then
         cat ~/proxy_info/vless_info.txt
-    elif docker ps --format '{{.Names}}' | grep -q '^xray_reality$'; then
-        docker exec xray_reality cat /config_info.txt 2>/dev/null || warn "配置信息不可用"
+    elif $DOCKER ps --format '{{.Names}}' | grep -q '^xray_reality$'; then
+        $DOCKER exec xray_reality cat /config_info.txt 2>/dev/null || warn "配置信息不可用"
     else
         warn "VLESS Reality 未安装"
     fi
@@ -334,18 +342,18 @@ show_logs() {
     case "$service" in
         vless)
             echo -e "${YELLOW}【VLESS Reality 日志】${NC}"
-            docker logs --tail $lines xray_reality 2>&1
+            $DOCKER logs --tail $lines xray_reality 2>&1
             ;;
         hy2|hysteria)
             echo -e "${YELLOW}【Hysteria2 日志】${NC}"
-            docker logs --tail $lines hysteria2 2>&1
+            $DOCKER logs --tail $lines hysteria2 2>&1
             ;;
         *)
             echo -e "${YELLOW}【VLESS Reality 日志】${NC}"
-            docker logs --tail $lines xray_reality 2>&1
+            $DOCKER logs --tail $lines xray_reality 2>&1
             echo ""
             echo -e "${YELLOW}【Hysteria2 日志】${NC}"
-            docker logs --tail $lines hysteria2 2>&1
+            $DOCKER logs --tail $lines hysteria2 2>&1
             ;;
     esac
 }
@@ -357,15 +365,15 @@ restart_service() {
     case "$service" in
         vless)
             log "重启 VLESS Reality..."
-            docker restart xray_reality
+            $DOCKER restart xray_reality
             ;;
         hy2|hysteria)
             log "重启 Hysteria2..."
-            docker restart hysteria2
+            $DOCKER restart hysteria2
             ;;
         *)
             log "重启所有服务..."
-            docker restart xray_reality hysteria2 2>/dev/null || true
+            $DOCKER restart xray_reality hysteria2 2>/dev/null || true
             ;;
     esac
     log "重启完成"
@@ -379,8 +387,8 @@ uninstall() {
     
     if [[ "$confirm" =~ ^[Yy]$ ]]; then
         log "停止并删除容器..."
-        docker stop xray_reality hysteria2 2>/dev/null || true
-        docker rm xray_reality hysteria2 2>/dev/null || true
+        $DOCKER stop xray_reality hysteria2 2>/dev/null || true
+        $DOCKER rm xray_reality hysteria2 2>/dev/null || true
         
         log "删除配置文件..."
         rm -rf ~/xray_config ~/hysteria2 ~/proxy_info
