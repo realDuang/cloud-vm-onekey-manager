@@ -15,7 +15,7 @@ One-click deployment script for VLESS Reality and Hysteria2 proxy services on cl
 
 ```bash
 # Download and run
-curl -fsSL https://raw.githubusercontent.com/user/cloud-vm-onekey-manager/main/xray_vless_reality_and_hysteria2.sh -o proxy.sh
+curl -fsSL https://raw.githubusercontent.com/realDuang/cloud-vm-onekey-manager/main/xray_vless_reality_and_hysteria2.sh -o proxy.sh
 chmod +x proxy.sh
 ./proxy.sh
 ```
