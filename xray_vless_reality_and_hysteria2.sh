@@ -252,7 +252,8 @@ install_vless() {
     
     # 生成 x25519 密钥对 (使用临时容器)
     log "生成 Reality 密钥对..."
-    KEY_PAIR=$($DOCKER run --rm ghcr.io/xtls/xray-core:latest xray x25519)
+    # 注意: ghcr.io/xtls/xray-core 镜像的 entrypoint 已经是 xray，所以只需传递子命令
+    KEY_PAIR=$($DOCKER run --rm ghcr.io/xtls/xray-core:latest x25519)
     PRIVATE_KEY=$(echo "$KEY_PAIR" | grep 'Private key:' | awk '{print $3}')
     PUBLIC_KEY=$(echo "$KEY_PAIR" | grep 'Public key:' | awk '{print $3}')
     
