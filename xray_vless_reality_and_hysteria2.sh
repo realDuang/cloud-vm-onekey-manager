@@ -255,17 +255,27 @@ install_vless() {
     # 注意: ghcr.io/xtls/xray-core 镜像的 entrypoint 已经是 xray，所以只需传递子命令
     KEY_PAIR=$($DOCKER run --rm ghcr.io/xtls/xray-core:latest x25519 2>&1)
     
-    # 新版 xray x25519 输出格式:
-    # PrivateKey: xxx
-    # Password: xxx (这是公钥，用于客户端配置)
-    # Hash32: xxx
-    PRIVATE_KEY=$(echo "$KEY_PAIR" | grep -E '^Private[Kk]ey:' | awk -F': ' '{print $2}' | tr -d ' \r\n')
-    # 新版用 Password 表示公钥，旧版用 Public key
-    PUBLIC_KEY=$(echo "$KEY_PAIR" | grep -E '^(Public [Kk]ey|Password):' | awk -F': ' '{print $2}' | tr -d ' \r\n')
+    # xray x25519 输出格式 (单行，空格分隔):
+    # PrivateKey: xxx Password: yyy Hash32: zzz
+    # 其中 Password 就是客户端需要的公钥 (PublicKey)
+    
+    # 使用 sed 直接提取，更可靠
+    PRIVATE_KEY=$(echo "$KEY_PAIR" | sed -n 's/.*PrivateKey:[[:space:]]*\([^[:space:]]*\).*/\1/p')
+    # Password 是新版的公钥字段名
+    PUBLIC_KEY=$(echo "$KEY_PAIR" | sed -n 's/.*Password:[[:space:]]*\([^[:space:]]*\).*/\1/p')
+    
+    # 如果新格式解析失败，尝试旧格式 (Private key: / Public key:)
+    if [ -z "$PRIVATE_KEY" ]; then
+        PRIVATE_KEY=$(echo "$KEY_PAIR" | sed -n 's/.*Private[[:space:]]*key:[[:space:]]*\([^[:space:]]*\).*/\1/p')
+    fi
+    if [ -z "$PUBLIC_KEY" ]; then
+        PUBLIC_KEY=$(echo "$KEY_PAIR" | sed -n 's/.*Public[[:space:]]*key:[[:space:]]*\([^[:space:]]*\).*/\1/p')
+    fi
     
     # 验证密钥是否生成成功
     if [ -z "$PRIVATE_KEY" ] || [ -z "$PUBLIC_KEY" ]; then
-        warn "密钥对输出: $KEY_PAIR"
+        warn "密钥对原始输出: $KEY_PAIR"
+        warn "解析结果 - 私钥: [$PRIVATE_KEY] 公钥: [$PUBLIC_KEY]"
         err "密钥生成失败，请检查 Docker 是否正常运行"
     fi
     info "私钥: ${PRIVATE_KEY:0:10}..."
@@ -274,12 +284,12 @@ install_vless() {
     # 生成 shortId (8字节随机hex)
     SHORT_ID=$(openssl rand -hex 8)
     
-    # 保存密钥信息
+    # 保存密钥信息 (使用等号分隔，方便解析)
     cat > ~/xray_config/keys.txt << EOF
-UUID: ${VLESS_UUID}
-Private Key: ${PRIVATE_KEY}
-Public Key: ${PUBLIC_KEY}
-Short ID: ${SHORT_ID}
+UUID=${VLESS_UUID}
+PrivateKey=${PRIVATE_KEY}
+PublicKey=${PUBLIC_KEY}
+ShortId=${SHORT_ID}
 EOF
     
     # 生成 Xray 配置文件 (优化版)
@@ -290,15 +300,8 @@ EOF
     },
     "dns": {
         "servers": [
-            {
-                "address": "https://1.1.1.1/dns-query",
-                "address": "1.1.1.1",
-                "skipFallback": true
-            },
-            {
-                "address": "8.8.8.8",
-                "skipFallback": true
-            }
+            "1.1.1.1",
+            "8.8.8.8"
         ],
         "queryStrategy": "UseIPv4",
         "disableCache": false,
@@ -490,15 +493,16 @@ EOF
 save_vless_info() {
     mkdir -p ~/proxy_info
     
-    # 读取保存的密钥信息
+    # 读取保存的密钥信息 (keys.txt 格式: KEY=VALUE)
     if [ ! -f ~/xray_config/keys.txt ]; then
         warn "密钥文件不存在"
         return
     fi
     
-    local uuid=$(grep 'UUID:' ~/xray_config/keys.txt | awk '{print $2}')
-    local public_key=$(grep 'Public Key:' ~/xray_config/keys.txt | awk '{print $3}')
-    local short_id=$(grep 'Short ID:' ~/xray_config/keys.txt | awk '{print $3}')
+    # 使用 source 或 grep+cut 解析 KEY=VALUE 格式
+    local uuid=$(grep '^UUID=' ~/xray_config/keys.txt | cut -d'=' -f2)
+    local public_key=$(grep '^PublicKey=' ~/xray_config/keys.txt | cut -d'=' -f2)
+    local short_id=$(grep '^ShortId=' ~/xray_config/keys.txt | cut -d'=' -f2)
     local server_name=$(echo "$REALITY_SERVER_NAMES" | cut -d',' -f1)
     
     # 如果变量为空，尝试从配置文件读取
@@ -672,11 +676,11 @@ show_info() {
         echo "二维码:"
         [ -f ~/proxy_info/vless_qr.txt ] && cat ~/proxy_info/vless_qr.txt
     elif [ -f ~/xray_config/keys.txt ]; then
-        # 重新生成信息
-        local uuid=$(grep 'UUID:' ~/xray_config/keys.txt | awk '{print $2}')
-        local public_key=$(grep 'Public Key:' ~/xray_config/keys.txt | awk '{print $3}')
-        local short_id=$(grep 'Short ID:' ~/xray_config/keys.txt | awk '{print $3}')
-        local port=$(grep -o '"port":\s*[0-9]*' ~/xray_config/config.json | head -1 | grep -o '[0-9]*')
+        # 重新生成信息 (keys.txt 格式: KEY=VALUE)
+        local uuid=$(grep '^UUID=' ~/xray_config/keys.txt | cut -d'=' -f2)
+        local public_key=$(grep '^PublicKey=' ~/xray_config/keys.txt | cut -d'=' -f2)
+        local short_id=$(grep '^ShortId=' ~/xray_config/keys.txt | cut -d'=' -f2)
+        local port=$(grep -o '"port":[[:space:]]*[0-9]*' ~/xray_config/config.json | head -1 | grep -o '[0-9]*')
         echo "地址: ${SERVER_IP}"
         echo "端口: ${port}"
         echo "UUID: ${uuid}"
