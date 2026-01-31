@@ -20,12 +20,33 @@ err() { echo -e "${RED}[✗]${NC} $1"; exit 1; }
 info() { echo -e "${CYAN}[i]${NC} $1"; }
 
 # 检测是否需要 sudo 运行 docker
-DOCKER="docker"
-if ! docker info &>/dev/null; then
-    if sudo docker info &>/dev/null; then
+detect_docker_cmd() {
+    if [ "$EUID" -eq 0 ]; then
+        # 已经是 root 用户
+        DOCKER="docker"
+        return
+    fi
+    
+    # 检查 sudo 权限
+    sudo -v >/dev/null 2>&1 || true
+    
+    if command -v docker &>/dev/null; then
+        # Docker 已安装，测试是否需要 sudo
+        if docker info &>/dev/null 2>&1; then
+            DOCKER="docker"
+        elif sudo docker info &>/dev/null 2>&1; then
+            DOCKER="sudo docker"
+        else
+            # 默认使用 sudo docker
+            DOCKER="sudo docker"
+        fi
+    else
+        # Docker 未安装，假设安装后需要 sudo（因为当前用户不在组里）
         DOCKER="sudo docker"
     fi
-fi
+}
+
+detect_docker_cmd
 
 # 获取公网 IP
 get_ip() {
@@ -57,6 +78,8 @@ input_port() {
 install_docker() {
     if command -v docker &>/dev/null; then
         log "Docker 已安装"
+        # 重新检测 docker 命令（确保权限正确）
+        detect_docker_cmd
         return
     fi
     
@@ -64,7 +87,13 @@ install_docker() {
     curl -fsSL get.docker.com -o /tmp/get-docker.sh
     sudo sh /tmp/get-docker.sh
     sudo usermod -aG docker $USER
+    
+    # Docker 刚安装完，用户组权限需要重新登录才生效
+    # 因此这里强制使用 sudo docker
+    DOCKER="sudo docker"
+    
     log "Docker 安装完成"
+    info "注意: 用户组权限需重新登录后生效，本次运行将使用 sudo"
 }
 
 # ==================== 安装 qrencode ====================
