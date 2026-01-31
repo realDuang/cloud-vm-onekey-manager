@@ -253,9 +253,18 @@ install_vless() {
     # 生成 x25519 密钥对 (使用临时容器)
     log "生成 Reality 密钥对..."
     # 注意: ghcr.io/xtls/xray-core 镜像的 entrypoint 已经是 xray，所以只需传递子命令
-    KEY_PAIR=$($DOCKER run --rm ghcr.io/xtls/xray-core:latest x25519)
-    PRIVATE_KEY=$(echo "$KEY_PAIR" | grep 'Private key:' | awk '{print $3}')
-    PUBLIC_KEY=$(echo "$KEY_PAIR" | grep 'Public key:' | awk '{print $3}')
+    KEY_PAIR=$($DOCKER run --rm ghcr.io/xtls/xray-core:latest x25519 2>&1)
+    # 调试：打印密钥对输出以便排查
+    info "密钥对输出: $KEY_PAIR"
+    PRIVATE_KEY=$(echo "$KEY_PAIR" | grep -i 'private' | awk -F': ' '{print $2}' | tr -d ' ')
+    PUBLIC_KEY=$(echo "$KEY_PAIR" | grep -i 'public' | awk -F': ' '{print $2}' | tr -d ' ')
+    
+    # 验证密钥是否生成成功
+    if [ -z "$PRIVATE_KEY" ] || [ -z "$PUBLIC_KEY" ]; then
+        err "密钥生成失败，请检查 Docker 是否正常运行"
+    fi
+    info "私钥: ${PRIVATE_KEY:0:10}..."
+    info "公钥: ${PUBLIC_KEY:0:10}..."
     
     # 生成 shortId (8字节随机hex)
     SHORT_ID=$(openssl rand -hex 8)
@@ -402,15 +411,23 @@ EOF
 EOF
 
     # 启动容器
+    # 注意: 必须显式指定 run -c 来使用挂载的配置文件，否则会使用默认配置目录
     $DOCKER run -d \
         --name xray_reality \
         --restart=always \
         --log-opt max-size=50m \
         -p ${VLESS_PORT}:443 \
         -v ~/xray_config/config.json:/etc/xray/config.json:ro \
-        ghcr.io/xtls/xray-core:latest
+        ghcr.io/xtls/xray-core:latest \
+        run -c /etc/xray/config.json
     
     sleep 3
+    
+    # 验证容器是否正常运行
+    if ! $DOCKER ps | grep -q xray_reality; then
+        err "Xray 容器启动失败，请检查日志: docker logs xray_reality"
+    fi
+    
     log "VLESS Reality 安装完成"
 }
 
