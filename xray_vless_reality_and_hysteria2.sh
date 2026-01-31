@@ -254,13 +254,18 @@ install_vless() {
     log "生成 Reality 密钥对..."
     # 注意: ghcr.io/xtls/xray-core 镜像的 entrypoint 已经是 xray，所以只需传递子命令
     KEY_PAIR=$($DOCKER run --rm ghcr.io/xtls/xray-core:latest x25519 2>&1)
-    # 调试：打印密钥对输出以便排查
-    info "密钥对输出: $KEY_PAIR"
-    PRIVATE_KEY=$(echo "$KEY_PAIR" | grep -i 'private' | awk -F': ' '{print $2}' | tr -d ' ')
-    PUBLIC_KEY=$(echo "$KEY_PAIR" | grep -i 'public' | awk -F': ' '{print $2}' | tr -d ' ')
+    
+    # 新版 xray x25519 输出格式:
+    # PrivateKey: xxx
+    # Password: xxx (这是公钥，用于客户端配置)
+    # Hash32: xxx
+    PRIVATE_KEY=$(echo "$KEY_PAIR" | grep -E '^Private[Kk]ey:' | awk -F': ' '{print $2}' | tr -d ' \r\n')
+    # 新版用 Password 表示公钥，旧版用 Public key
+    PUBLIC_KEY=$(echo "$KEY_PAIR" | grep -E '^(Public [Kk]ey|Password):' | awk -F': ' '{print $2}' | tr -d ' \r\n')
     
     # 验证密钥是否生成成功
     if [ -z "$PRIVATE_KEY" ] || [ -z "$PUBLIC_KEY" ]; then
+        warn "密钥对输出: $KEY_PAIR"
         err "密钥生成失败，请检查 Docker 是否正常运行"
     fi
     info "私钥: ${PRIVATE_KEY:0:10}..."
