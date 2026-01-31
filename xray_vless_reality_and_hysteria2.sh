@@ -6,6 +6,8 @@ VLESS_PORT=""
 HY2_PORT=""
 HY2_PASSWORD=""
 MASQUERADE_SITE="www.bing.com"
+REALITY_DEST="www.microsoft.com:443"  # Reality 伪装目标
+REALITY_SERVER_NAMES="www.microsoft.com,microsoft.com"  # SNI 列表
 # ================================================
 
 RED='\033[0;31m'
@@ -96,11 +98,142 @@ install_docker() {
     info "注意: 用户组权限需重新登录后生效，本次运行将使用 sudo"
 }
 
-# ==================== 安装 qrencode ====================
+# ==================== 安装依赖包 ====================
+install_packages() {
+    local packages=("qrencode" "openssl" "curl")
+    local missing=()
+    
+    for pkg in "${packages[@]}"; do
+        if ! command -v "$pkg" &>/dev/null; then
+            missing+=("$pkg")
+        fi
+    done
+    
+    if [ ${#missing[@]} -eq 0 ]; then
+        return
+    fi
+    
+    log "安装依赖包: ${missing[*]}..."
+    
+    # 检测包管理器
+    if command -v apt-get &>/dev/null; then
+        # Debian/Ubuntu
+        sudo apt-get update -qq
+        sudo apt-get install -y -qq "${missing[@]}"
+    elif command -v dnf &>/dev/null; then
+        # Fedora/RHEL 8+
+        sudo dnf install -y -q "${missing[@]}"
+    elif command -v yum &>/dev/null; then
+        # CentOS/RHEL 7
+        sudo yum install -y -q "${missing[@]}"
+    elif command -v pacman &>/dev/null; then
+        # Arch Linux
+        sudo pacman -S --noconfirm "${missing[@]}"
+    elif command -v apk &>/dev/null; then
+        # Alpine
+        sudo apk add --no-cache "${missing[@]}"
+    else
+        warn "未知的包管理器，请手动安装: ${missing[*]}"
+    fi
+}
+
+# 兼容旧函数名
 install_qrencode() {
-    if ! command -v qrencode &>/dev/null; then
-        log "安装 qrencode..."
-        sudo apt-get update -qq && sudo apt-get install -y -qq qrencode
+    install_packages
+}
+
+# ==================== 系统内核优化 ====================
+optimize_kernel() {
+    log "优化系统内核参数..."
+    
+    # 检查是否已经优化过
+    if grep -q "# Xray Optimization" /etc/sysctl.conf 2>/dev/null; then
+        info "内核参数已优化，跳过"
+        return
+    fi
+    
+    # 获取内核版本
+    local kernel_version=$(uname -r | cut -d'.' -f1-2)
+    local kernel_major=$(echo $kernel_version | cut -d'.' -f1)
+    local kernel_minor=$(echo $kernel_version | cut -d'.' -f2)
+    info "检测到内核版本: $(uname -r)"
+    
+    # 备份原配置
+    sudo cp /etc/sysctl.conf /etc/sysctl.conf.bak.$(date +%Y%m%d%H%M%S)
+    
+    # 追加优化参数
+    sudo tee -a /etc/sysctl.conf > /dev/null << 'EOF'
+
+# Xray Optimization - TCP/Network Performance
+# ============================================
+
+# TCP Fast Open (减少握手延迟)
+net.ipv4.tcp_fastopen = 3
+
+# TCP BBR 拥塞控制算法 (提升吞吐量)
+net.core.default_qdisc = fq
+net.ipv4.tcp_congestion_control = bbr
+
+# 增大 TCP 缓冲区
+net.core.rmem_default = 1048576
+net.core.rmem_max = 16777216
+net.core.wmem_default = 1048576
+net.core.wmem_max = 16777216
+net.ipv4.tcp_rmem = 4096 1048576 16777216
+net.ipv4.tcp_wmem = 4096 1048576 16777216
+
+# 优化 TCP 连接
+net.ipv4.tcp_mtu_probing = 1
+net.ipv4.tcp_slow_start_after_idle = 0
+net.ipv4.tcp_no_metrics_save = 1
+net.ipv4.tcp_fin_timeout = 15
+net.ipv4.tcp_keepalive_time = 300
+net.ipv4.tcp_keepalive_intvl = 30
+net.ipv4.tcp_keepalive_probes = 3
+
+# 增大连接队列
+net.core.somaxconn = 65535
+net.core.netdev_max_backlog = 65535
+net.ipv4.tcp_max_syn_backlog = 65535
+
+# TIME_WAIT 优化
+net.ipv4.tcp_tw_reuse = 1
+net.ipv4.tcp_max_tw_buckets = 65535
+
+# 本地端口范围
+net.ipv4.ip_local_port_range = 1024 65535
+
+EOF
+
+    # 检查并启用 MPTCP (内核 5.6+)
+    if [ "$kernel_major" -gt 5 ] || ([ "$kernel_major" -eq 5 ] && [ "$kernel_minor" -ge 6 ]); then
+        if [ -f /proc/sys/net/mptcp/enabled ]; then
+            echo "" | sudo tee -a /etc/sysctl.conf > /dev/null
+            echo "# MPTCP 多路径 TCP (内核 5.6+)" | sudo tee -a /etc/sysctl.conf > /dev/null
+            echo "net.mptcp.enabled = 1" | sudo tee -a /etc/sysctl.conf > /dev/null
+            info "MPTCP 已启用 (内核 ${kernel_version} 支持)"
+        fi
+    fi
+
+    # 应用配置
+    sudo sysctl -p > /dev/null 2>&1 || true
+    
+    log "内核优化完成"
+    
+    # 检查 BBR 是否启用
+    local current_cc=$(sysctl -n net.ipv4.tcp_congestion_control 2>/dev/null)
+    if [ "$current_cc" = "bbr" ]; then
+        info "BBR 拥塞控制已启用 ✓"
+    elif lsmod | grep -q bbr 2>/dev/null; then
+        info "BBR 模块已加载"
+    else
+        warn "BBR 可能未启用，请检查内核版本 (需要 4.9+)"
+    fi
+    
+    # 检查 TFO 状态
+    local tfo_status=$(sysctl -n net.ipv4.tcp_fastopen 2>/dev/null)
+    if [ "$tfo_status" = "3" ]; then
+        info "TCP Fast Open 已启用 (客户端+服务端) ✓"
     fi
 }
 
@@ -114,14 +247,167 @@ install_vless() {
     log "安装 VLESS Reality (端口: ${VLESS_PORT})..."
     mkdir -p ~/xray_config
     
+    # 生成 UUID
+    VLESS_UUID=$(cat /proc/sys/kernel/random/uuid)
+    
+    # 生成 x25519 密钥对 (使用临时容器)
+    log "生成 Reality 密钥对..."
+    KEY_PAIR=$($DOCKER run --rm ghcr.io/xtls/xray-core:latest xray x25519)
+    PRIVATE_KEY=$(echo "$KEY_PAIR" | grep 'Private key:' | awk '{print $3}')
+    PUBLIC_KEY=$(echo "$KEY_PAIR" | grep 'Public key:' | awk '{print $3}')
+    
+    # 生成 shortId (8字节随机hex)
+    SHORT_ID=$(openssl rand -hex 8)
+    
+    # 保存密钥信息
+    cat > ~/xray_config/keys.txt << EOF
+UUID: ${VLESS_UUID}
+Private Key: ${PRIVATE_KEY}
+Public Key: ${PUBLIC_KEY}
+Short ID: ${SHORT_ID}
+EOF
+    
+    # 生成 Xray 配置文件 (优化版)
+    cat > ~/xray_config/config.json << EOF
+{
+    "log": {
+        "loglevel": "warning"
+    },
+    "dns": {
+        "servers": [
+            {
+                "address": "https://1.1.1.1/dns-query",
+                "address": "1.1.1.1",
+                "skipFallback": true
+            },
+            {
+                "address": "8.8.8.8",
+                "skipFallback": true
+            }
+        ],
+        "queryStrategy": "UseIPv4",
+        "disableCache": false,
+        "disableFallback": true
+    },
+    "inbounds": [
+        {
+            "listen": "0.0.0.0",
+            "port": 443,
+            "protocol": "vless",
+            "settings": {
+                "clients": [
+                    {
+                        "id": "${VLESS_UUID}",
+                        "flow": "xtls-rprx-vision"
+                    }
+                ],
+                "decryption": "none"
+            },
+            "streamSettings": {
+                "network": "tcp",
+                "security": "reality",
+                "realitySettings": {
+                    "dest": "${REALITY_DEST}",
+                    "serverNames": [
+                        $(echo "$REALITY_SERVER_NAMES" | sed 's/,/","/g' | sed 's/^/"/;s/$/"/')
+                    ],
+                    "privateKey": "${PRIVATE_KEY}",
+                    "shortIds": [
+                        "${SHORT_ID}"
+                    ]
+                },
+                "tcpSettings": {
+                    "acceptProxyProtocol": false,
+                    "header": {
+                        "type": "none"
+                    }
+                },
+                "sockopt": {
+                    "tcpFastOpen": true,
+                    "tcpNoDelay": true,
+                    "tcpKeepAliveInterval": 15,
+                    "tcpKeepAliveIdle": 30,
+                    "tcpMptcp": true
+                }
+            },
+            "sniffing": {
+                "enabled": true,
+                "destOverride": [
+                    "http",
+                    "tls",
+                    "quic"
+                ],
+                "routeOnly": true
+            }
+        }
+    ],
+    "outbounds": [
+        {
+            "protocol": "freedom",
+            "tag": "direct",
+            "settings": {
+                "domainStrategy": "UseIPv4"
+            },
+            "streamSettings": {
+                "sockopt": {
+                    "tcpFastOpen": true,
+                    "tcpNoDelay": true,
+                    "tcpMptcp": true
+                }
+            }
+        },
+        {
+            "protocol": "blackhole",
+            "tag": "block"
+        },
+        {
+            "protocol": "dns",
+            "tag": "dns-out"
+        }
+    ],
+    "routing": {
+        "domainStrategy": "IPIfNonMatch",
+        "rules": [
+            {
+                "type": "field",
+                "inboundTag": ["dns-in"],
+                "outboundTag": "dns-out"
+            },
+            {
+                "type": "field",
+                "protocol": ["bittorrent"],
+                "outboundTag": "block"
+            }
+        ]
+    },
+    "policy": {
+        "levels": {
+            "0": {
+                "handshake": 2,
+                "connIdle": 120,
+                "uplinkOnly": 1,
+                "downlinkOnly": 1,
+                "bufferSize": 64
+            }
+        },
+        "system": {
+            "statsInboundUplink": false,
+            "statsInboundDownlink": false,
+            "statsOutboundUplink": false,
+            "statsOutboundDownlink": false
+        }
+    }
+}
+EOF
+
+    # 启动容器
     $DOCKER run -d \
         --name xray_reality \
         --restart=always \
         --log-opt max-size=50m \
         -p ${VLESS_PORT}:443 \
-        -e EXTERNAL_PORT=${VLESS_PORT} \
-        -v ~/xray_config:/data \
-        wulabing/xray_docker_reality:latest
+        -v ~/xray_config/config.json:/etc/xray/config.json:ro \
+        ghcr.io/xtls/xray-core:latest
     
     sleep 3
     log "VLESS Reality 安装完成"
@@ -181,32 +467,53 @@ EOF
 save_vless_info() {
     mkdir -p ~/proxy_info
     
-    # 等待容器生成配置信息
-    local max_wait=30
-    local waited=0
+    # 读取保存的密钥信息
+    if [ ! -f ~/xray_config/keys.txt ]; then
+        warn "密钥文件不存在"
+        return
+    fi
     
-    while [ $waited -lt $max_wait ]; do
-        if $DOCKER exec xray_reality cat /config_info.txt &>/dev/null; then
-            # 保存完整配置信息
-            $DOCKER exec xray_reality cat /config_info.txt > ~/proxy_info/vless_info.txt
-            
-            # 提取分享链接
-            $DOCKER exec xray_reality cat /config_info.txt | grep -E "^vless://" > ~/proxy_info/vless_uri.txt 2>/dev/null || true
-            
-            # 生成二维码
-            local vless_uri=$(cat ~/proxy_info/vless_uri.txt 2>/dev/null)
-            if [ -n "$vless_uri" ]; then
-                qrencode -t UTF8 -o ~/proxy_info/vless_qr.txt "$vless_uri"
-            fi
-            
-            log "VLESS 信息已保存"
-            return
-        fi
-        sleep 1
-        ((waited++))
-    done
+    local uuid=$(grep 'UUID:' ~/xray_config/keys.txt | awk '{print $2}')
+    local public_key=$(grep 'Public Key:' ~/xray_config/keys.txt | awk '{print $3}')
+    local short_id=$(grep 'Short ID:' ~/xray_config/keys.txt | awk '{print $3}')
+    local server_name=$(echo "$REALITY_SERVER_NAMES" | cut -d',' -f1)
     
-    warn "VLESS 配置信息暂未生成，稍后可使用 '$0 info' 查看"
+    # 如果变量为空，尝试从配置文件读取
+    if [ -z "$server_name" ]; then
+        server_name=$(grep -o '"serverNames":\s*\[\s*"[^"]*"' ~/xray_config/config.json | head -1 | grep -o '"[^"]*"$' | tr -d '"')
+    fi
+    
+    # 生成分享链接
+    # 格式: vless://uuid@server:port?encryption=none&flow=xtls-rprx-vision&security=reality&sni=xxx&fp=chrome&pbk=xxx&sid=xxx&type=tcp#name
+    local vless_uri="vless://${uuid}@${SERVER_IP}:${VLESS_PORT}?encryption=none&flow=xtls-rprx-vision&security=reality&sni=${server_name}&fp=chrome&pbk=${public_key}&sid=${short_id}&type=tcp#VLESS-Reality-${SERVER_IP}"
+    
+    echo "${vless_uri}" > ~/proxy_info/vless_uri.txt
+    
+    # 保存详细信息
+    cat > ~/proxy_info/vless_info.txt << EOF
+================== VLESS Reality 配置 ==================
+地址 (Address): ${SERVER_IP}
+端口 (Port): ${VLESS_PORT}
+UUID: ${uuid}
+流控 (Flow): xtls-rprx-vision
+加密 (Encryption): none
+传输协议 (Network): tcp
+伪装类型 (Type): none
+安全 (Security): reality
+SNI: ${server_name}
+指纹 (Fingerprint): chrome
+公钥 (Public Key): ${public_key}
+Short ID: ${short_id}
+
+分享链接:
+${vless_uri}
+=========================================================
+EOF
+
+    # 生成二维码
+    qrencode -t UTF8 -o ~/proxy_info/vless_qr.txt "${vless_uri}"
+    
+    log "VLESS 信息已保存"
 }
 
 # ==================== 保存 Hysteria2 信息 ====================
@@ -260,10 +567,11 @@ print_info() {
         echo -e "${YELLOW}【VLESS Reality】${NC}"
         if [ -f ~/proxy_info/vless_info.txt ]; then
             cat ~/proxy_info/vless_info.txt
-        elif [ -f ~/xray_config/config_info.txt ]; then
-            cat ~/xray_config/config_info.txt
+            echo ""
+            echo "二维码:"
+            [ -f ~/proxy_info/vless_qr.txt ] && cat ~/proxy_info/vless_qr.txt
         else
-            $DOCKER exec xray_reality cat /config_info.txt 2>/dev/null || warn "VLESS 配置信息暂未生成"
+            warn "VLESS 配置信息暂未生成"
         fi
         echo ""
     fi
@@ -337,8 +645,20 @@ show_info() {
     echo -e "${YELLOW}【VLESS Reality】${NC}"
     if [ -f ~/proxy_info/vless_info.txt ]; then
         cat ~/proxy_info/vless_info.txt
-    elif $DOCKER ps --format '{{.Names}}' | grep -q '^xray_reality$'; then
-        $DOCKER exec xray_reality cat /config_info.txt 2>/dev/null || warn "配置信息不可用"
+        echo ""
+        echo "二维码:"
+        [ -f ~/proxy_info/vless_qr.txt ] && cat ~/proxy_info/vless_qr.txt
+    elif [ -f ~/xray_config/keys.txt ]; then
+        # 重新生成信息
+        local uuid=$(grep 'UUID:' ~/xray_config/keys.txt | awk '{print $2}')
+        local public_key=$(grep 'Public Key:' ~/xray_config/keys.txt | awk '{print $3}')
+        local short_id=$(grep 'Short ID:' ~/xray_config/keys.txt | awk '{print $3}')
+        local port=$(grep -o '"port":\s*[0-9]*' ~/xray_config/config.json | head -1 | grep -o '[0-9]*')
+        echo "地址: ${SERVER_IP}"
+        echo "端口: ${port}"
+        echo "UUID: ${uuid}"
+        echo "公钥: ${public_key}"
+        echo "Short ID: ${short_id}"
     else
         warn "VLESS Reality 未安装"
     fi
@@ -445,6 +765,8 @@ show_menu() {
     echo "  7) 重启服务"
     echo "  8) 卸载"
     echo ""
+    echo "  9) 优化系统内核 (BBR/TCP)"
+    echo ""
     echo "  0) 退出"
     echo ""
     echo "============================================================"
@@ -460,6 +782,7 @@ do_install() {
     
     install_docker
     install_qrencode
+    optimize_kernel
     
     if [ "$install_vless_flag" = "true" ]; then
         VLESS_PORT=$(input_port "请输入 VLESS Reality 端口" "443")
@@ -518,7 +841,7 @@ main() {
     # 交互式菜单
     while true; do
         show_menu
-        read -p "请选择 [0-8]: " choice
+        read -p "请选择 [0-9]: " choice
         
         case "$choice" in
             1)
@@ -547,6 +870,9 @@ main() {
                 ;;
             8)
                 uninstall
+                ;;
+            9)
+                optimize_kernel
                 ;;
             0)
                 echo "Bye!"
