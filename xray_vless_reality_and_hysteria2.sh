@@ -783,22 +783,77 @@ restart_service() {
 
 # ==================== 卸载服务 ====================
 uninstall() {
-    echo ""
-    echo -e "${RED}警告: 此操作将删除所有代理服务和配置！${NC}"
-    read -p "确认卸载? (y/N): " confirm
+    local service=$1
     
-    if [[ "$confirm" =~ ^[Yy]$ ]]; then
-        log "停止并删除容器..."
-        $DOCKER stop xray_reality hysteria2 2>/dev/null || true
-        $DOCKER rm xray_reality hysteria2 2>/dev/null || true
-        
-        log "删除配置文件..."
-        rm -rf ~/xray_config ~/hysteria2 ~/proxy_info
-        
-        log "卸载完成"
-    else
-        info "已取消"
-    fi
+    echo ""
+    
+    case "$service" in
+        vless)
+            echo -e "${RED}警告: 此操作将删除 VLESS Reality 服务和配置！${NC}"
+            read -p "确认卸载 VLESS Reality? (y/N): " confirm
+            if [[ "$confirm" =~ ^[Yy]$ ]]; then
+                log "停止并删除 VLESS Reality 容器..."
+                $DOCKER stop xray_reality 2>/dev/null || true
+                $DOCKER rm xray_reality 2>/dev/null || true
+                log "删除 VLESS 配置文件..."
+                rm -rf ~/xray_config
+                rm -f ~/proxy_info/vless_*.txt
+                log "VLESS Reality 卸载完成"
+            else
+                info "已取消"
+            fi
+            ;;
+        hy2|hysteria)
+            echo -e "${RED}警告: 此操作将删除 Hysteria2 服务和配置！${NC}"
+            read -p "确认卸载 Hysteria2? (y/N): " confirm
+            if [[ "$confirm" =~ ^[Yy]$ ]]; then
+                log "停止并删除 Hysteria2 容器..."
+                $DOCKER stop hysteria2 2>/dev/null || true
+                $DOCKER rm hysteria2 2>/dev/null || true
+                log "删除 Hysteria2 配置文件..."
+                rm -rf ~/hysteria2
+                rm -f ~/proxy_info/hy2_*.txt
+                log "Hysteria2 卸载完成"
+            else
+                info "已取消"
+            fi
+            ;;
+        *)
+            echo -e "${RED}警告: 此操作将删除所有代理服务和配置！${NC}"
+            echo ""
+            echo "  1) 仅卸载 VLESS Reality"
+            echo "  2) 仅卸载 Hysteria2"
+            echo "  3) 卸载全部"
+            echo "  0) 取消"
+            echo ""
+            read -p "请选择 [0-3]: " choice
+            
+            case "$choice" in
+                1)
+                    uninstall "vless"
+                    ;;
+                2)
+                    uninstall "hy2"
+                    ;;
+                3)
+                    read -p "确认卸载全部服务? (y/N): " confirm
+                    if [[ "$confirm" =~ ^[Yy]$ ]]; then
+                        log "停止并删除所有容器..."
+                        $DOCKER stop xray_reality hysteria2 2>/dev/null || true
+                        $DOCKER rm xray_reality hysteria2 2>/dev/null || true
+                        log "删除所有配置文件..."
+                        rm -rf ~/xray_config ~/hysteria2 ~/proxy_info
+                        log "全部卸载完成"
+                    else
+                        info "已取消"
+                    fi
+                    ;;
+                *)
+                    info "已取消"
+                    ;;
+            esac
+            ;;
+    esac
 }
 
 # ==================== 显示菜单 ====================
@@ -873,7 +928,7 @@ main() {
             exit 0
             ;;
         uninstall)
-            uninstall
+            uninstall "$2"
             exit 0
             ;;
         help|--help|-h)
@@ -885,7 +940,7 @@ main() {
             echo "  info         查看连接配置信息"
             echo "  logs [服务] [行数]  查看日志 (vless/hy2/all)"
             echo "  restart [服务]      重启服务 (vless/hy2/all)"
-            echo "  uninstall    卸载所有服务"
+            echo "  uninstall [服务]    卸载服务 (vless/hy2/all)"
             echo "  help         显示此帮助"
             exit 0
             ;;
