@@ -456,13 +456,6 @@ install_hysteria() {
         -keyout server.key -out server.crt \
         -subj "/CN=${MASQUERADE_SITE}" -days 36500 2>/dev/null
     
-    # 提取证书 SHA256 指纹 (用于 pinnedPeerCertificateChainSha256)
-    local cert_hash=$(openssl x509 -in server.crt -pubkey -noout | \
-        openssl pkey -pubin -outform DER | \
-        openssl dgst -sha256 -binary | base64)
-    echo "${cert_hash}" > ~/hysteria2/cert_hash.txt
-    info "证书指纹 (SHA256): ${cert_hash}"
-    
     # 保存密码到文件
     echo "${HY2_PASSWORD}" > ~/hysteria2/password.txt
     
@@ -565,22 +558,8 @@ save_hy2_info() {
         port=$(grep -E "^listen:" ~/hysteria2/config.yaml | sed 's/listen: ://')
     fi
     
-    # 读取证书指纹
-    local cert_hash=""
-    if [ -f ~/hysteria2/cert_hash.txt ]; then
-        cert_hash=$(cat ~/hysteria2/cert_hash.txt)
-    elif [ -f ~/hysteria2/server.crt ]; then
-        # 如果指纹文件不存在，从证书重新生成
-        cert_hash=$(openssl x509 -in ~/hysteria2/server.crt -pubkey -noout | \
-            openssl pkey -pubin -outform DER | \
-            openssl dgst -sha256 -binary | base64)
-        echo "${cert_hash}" > ~/hysteria2/cert_hash.txt
-    fi
-    
     if [ -n "$HY2_PASSWORD" ] && [ -n "$port" ]; then
-        # 新版 v2rayN/Xray 使用 pinSHA256 替代 insecure
-        # URI 格式: hysteria2://password@host:port?sni=xxx&pinSHA256=xxx#name
-        local hy2_uri="hysteria2://${HY2_PASSWORD}@${SERVER_IP}:${port}?sni=${MASQUERADE_SITE}&pinSHA256=${cert_hash}#Hy2-${SERVER_IP}"
+        local hy2_uri="hysteria2://${HY2_PASSWORD}@${SERVER_IP}:${port}?insecure=1&sni=${MASQUERADE_SITE}#Hy2-${SERVER_IP}"
         
         echo "${hy2_uri}" > ~/proxy_info/hy2_uri.txt
         qrencode -t UTF8 -o ~/proxy_info/hy2_qr.txt "${hy2_uri}"
@@ -591,12 +570,9 @@ save_hy2_info() {
 端口: ${port}
 密码: ${HY2_PASSWORD}
 SNI: ${MASQUERADE_SITE}
-证书指纹 (pinSHA256): ${cert_hash}
 
-分享链接 (新版 v2rayN/Xray):
+分享链接:
 ${hy2_uri}
-
-注意: 新版客户端已移除 insecure 选项，改用 pinSHA256 证书指纹固定
 EOF
         log "Hysteria2 信息已保存"
     fi
@@ -725,11 +701,9 @@ show_info() {
     elif [ -f ~/hysteria2/config.yaml ]; then
         local password=$(cat ~/hysteria2/password.txt 2>/dev/null)
         local port=$(grep -E "^listen:" ~/hysteria2/config.yaml | sed 's/listen: ://')
-        local cert_hash=$(cat ~/hysteria2/cert_hash.txt 2>/dev/null)
         echo "地址: ${SERVER_IP}"
         echo "端口: ${port}"
         echo "密码: ${password}"
-        echo "证书指纹: ${cert_hash}"
     else
         warn "Hysteria2 未安装"
     fi
