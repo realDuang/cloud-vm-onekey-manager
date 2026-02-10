@@ -459,7 +459,7 @@ install_hysteria() {
     # 保存密码到文件
     echo "${HY2_PASSWORD}" > ~/hysteria2/password.txt
     
-    # 生成配置
+    # 生成配置（包含稳定性优化）
     cat > config.yaml << EOF
 listen: :${HY2_PORT}
 
@@ -476,6 +476,19 @@ masquerade:
   proxy:
     url: https://${MASQUERADE_SITE}
     rewriteHost: true
+
+# Stability optimizations
+quic:
+  initStreamReceiveWindow: 8388608
+  maxStreamReceiveWindow: 8388608
+  initConnReceiveWindow: 20971520
+  maxConnReceiveWindow: 20971520
+  maxIdleTimeout: 60s
+  keepAlivePeriod: 20s
+
+bandwidth:
+  up: 100 mbps
+  down: 100 mbps
 EOF
 
     $DOCKER run -d \
@@ -487,6 +500,14 @@ EOF
         tobyxdd/hysteria:v2 server -c /etc/hysteria/config.yaml
     
     log "Hysteria2 安装完成"
+}
+
+# ==================== 设置定时重启 ====================
+setup_cron() {
+    log "设置每日定时重启 (UTC 20:00 / 北京时间 04:00)..."
+    (crontab -l 2>/dev/null | grep -v 'docker restart hysteria2 xray_reality'; \
+     echo '0 20 * * * docker restart hysteria2 xray_reality >/dev/null 2>&1') | crontab -
+    log "定时重启已设置"
 }
 
 # ==================== 保存 VLESS 信息 ====================
@@ -845,9 +866,9 @@ show_menu() {
     echo "  5) 查看连接信息"
     echo "  6) 查看日志"
     echo "  7) 重启服务"
-    echo "  8) 卸载"
-    echo ""
+    echo "  8) 设置/取消定时重启"
     echo "  9) 优化系统内核 (BBR/TCP)"
+    echo "  10) 卸载"
     echo ""
     echo "  0) 退出"
     echo ""
@@ -877,6 +898,9 @@ do_install() {
         install_hysteria
         save_hy2_info
     fi
+    
+    # 设置定时重启防止服务卡死
+    setup_cron
     
     print_info "$install_vless_flag" "$install_hy2_flag"
 }
@@ -951,10 +975,26 @@ main() {
                 restart_service "${restart_svc:-all}"
                 ;;
             8)
-                uninstall
+                if crontab -l 2>/dev/null | grep -q 'docker restart hysteria2 xray_reality'; then
+                    echo -e "${YELLOW}当前已设置定时重启 (UTC 20:00 / 北京时间 04:00)${NC}"
+                    read -p "是否取消定时重启? (y/N): " cancel_cron
+                    if [[ "$cancel_cron" =~ ^[Yy]$ ]]; then
+                        crontab -l 2>/dev/null | grep -v 'docker restart hysteria2 xray_reality' | crontab -
+                        log "定时重启已取消"
+                    fi
+                else
+                    echo -e "${YELLOW}当前未设置定时重启${NC}"
+                    read -p "是否设置每日定时重启? (Y/n): " set_cron
+                    if [[ ! "$set_cron" =~ ^[Nn]$ ]]; then
+                        setup_cron
+                    fi
+                fi
                 ;;
             9)
                 optimize_kernel
+                ;;
+            10)
+                uninstall
                 ;;
             0)
                 echo "Bye!"
